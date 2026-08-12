@@ -44,7 +44,7 @@ Watt currently ships an Apple Silicon release archive. Build it locally with a s
 
 This creates `dist/Watt-1.0.0-macos-arm64.zip` plus its SHA-256 file. The archive contains an ad-hoc signed app whose embedded version is set from the command line without modifying the source `Info.plist`.
 
-Pushing a tag such as `v1.0.0` runs the release workflow, tests Watt, builds the archive on an Apple Silicon GitHub runner, generates `watt.rb` for the repository, and creates the GitHub release. The workflow can also be run manually; in that case it creates the matching tag.
+Pushing a tag such as `v1.0.0` runs the release workflow, tests Watt, builds the archive on an Apple Silicon GitHub runner, generates `watt.rb`, creates the GitHub release, and updates `josipmusa/homebrew-tap` automatically. The workflow can also be run manually; in that case it creates the matching tag. Cross-repository access uses the `HOMEBREW_TAP_DEPLOY_KEY` Actions secret, whose matching write-enabled deploy key is attached only to the tap repository.
 
 To make the cask after the release archive exists, substitute your real GitHub source repository:
 
@@ -70,7 +70,7 @@ open /Applications/Watt.app
 
 Do not use `xattr -cr` here: it clears every extended attribute recursively, while the targeted command above removes only `com.apple.quarantine`. Homebrew may apply quarantine to the replacement app again during a later upgrade, requiring this step to be repeated.
 
-For each update, publish a new tag, download the `watt.rb` generated alongside that GitHub release, and commit the cask to `homebrew-tap`. The release-generated cask must be used because its checksum matches the archive built by GitHub Actions. Homebrew users update with:
+For each update, bump the app version, commit and push the change, then publish the matching tag. The release workflow commits the release-generated cask to `homebrew-tap`; that cask's checksum matches the archive built by GitHub Actions. Homebrew users update with:
 
 ```sh
 brew update
@@ -78,7 +78,7 @@ brew upgrade --cask watt
 open -a Watt
 ```
 
-Homebrew replaces the app in `/Applications` and may quit it during the upgrade, so `open -a Watt` starts the new build immediately. Otherwise, an enabled login item starts it at the next login. This initial setup intentionally keeps tap updates manual; automating changes to a second repository would require a narrowly scoped GitHub App or token.
+Homebrew replaces the app in `/Applications` and may quit it during the upgrade, so `open -a Watt` starts the new build immediately. Otherwise, an enabled login item starts it at the next login.
 
 ## License
 

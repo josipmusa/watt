@@ -52,7 +52,40 @@ jobs:
         run: |
           tag="v${VERSION}"
           if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then
-            git tag "$tag"
-            git push origin "$tag"
+            if ! git ls-remote --exit-code --tags origin "refs/tags/${tag}" >/dev/null 2>&1; then
+              git tag "$tag"
+              git push origin "$tag"
+            fi
           fi
-          gh release create "$tag" dist/* --generate-notes --verify-tag
+          if gh release view "$tag" >/dev/null 2>&1; then
+            # A retry after publishing may reach this step again. Use the cask
+            # from the existing release so its checksum still matches the
+            # archive users can download.
+            gh release download "$tag" --pattern watt.rb --dir dist --clobber
+          else
+            gh release create "$tag" dist/* --generate-notes --verify-tag
+          fi
+
+      - name: Check out Homebrew tap
+        uses: actions/checkout@v6
+        with:
+          repository: josipmusa/homebrew-tap
+          ref: main
+          path: homebrew-tap
+          ssh-key: ${{ secrets.HOMEBREW_TAP_DEPLOY_KEY }}
+
+      - name: Publish Homebrew cask
+        env:
+          VERSION: ${{ steps.version.outputs.value }}
+        run: |
+          cp dist/watt.rb homebrew-tap/Casks/watt.rb
+          cd homebrew-tap
+          if git diff --quiet -- Casks/watt.rb; then
+            echo "Homebrew cask is already current."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Casks/watt.rb
+          git commit -m "Update Watt to ${VERSION}"
+          git push origin main
