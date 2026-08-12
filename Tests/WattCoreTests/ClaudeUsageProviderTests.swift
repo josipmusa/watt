@@ -145,4 +145,39 @@ struct ClaudeUsageProviderTests {
 
         #expect(ClaudeConfigurationDetector.decode(data) == .configured("Amazon Bedrock"))
     }
+
+    @Test func boundedProcessCapturesOutput() async {
+        let data = await BoundedProcess.run(
+            executable: URL(fileURLWithPath: "/bin/sh"),
+            arguments: ["-c", "printf '{\"loggedIn\":true}'"],
+            timeout: 1,
+            maximumOutputBytes: 1_024
+        )
+
+        #expect(data == Data(#"{"loggedIn":true}"#.utf8))
+    }
+
+    @Test func boundedProcessStopsAtTimeout() async {
+        let started = Date()
+        let data = await BoundedProcess.run(
+            executable: URL(fileURLWithPath: "/bin/sh"),
+            arguments: ["-c", "sleep 2"],
+            timeout: 0.05,
+            maximumOutputBytes: 1_024
+        )
+
+        #expect(data == nil)
+        #expect(Date().timeIntervalSince(started) < 1)
+    }
+
+    @Test func boundedProcessRejectsOversizedOutput() async {
+        let data = await BoundedProcess.run(
+            executable: URL(fileURLWithPath: "/bin/sh"),
+            arguments: ["-c", "printf 1234567890"],
+            timeout: 1,
+            maximumOutputBytes: 5
+        )
+
+        #expect(data == nil)
+    }
 }

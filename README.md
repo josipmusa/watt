@@ -11,11 +11,11 @@ Requirements: macOS 14 or newer, Claude Code and/or Codex installed and signed i
 open .build/Watt.app
 ```
 
-The script builds, packages, and ad-hoc signs `.build/Watt.app`. Full Xcode is optional; open `Watt.xcodeproj` if you prefer its Run workflow. To keep Watt in a stable location, drag the built app into `/Applications` and open that copy.
+The script builds, packages, and ad-hoc signs `.build/Watt.app` with Apple's hardened runtime enabled. Full Xcode is optional; open `Watt.xcodeproj` if you prefer its Run workflow. To keep Watt in a stable location, drag the built app into `/Applications` and open that copy.
 
 On first launch, Watt discovers supported harnesses and shows one compact HUD row per configured harness. Turn off **Keep Visible** in the menu-bar popover if you want to use only the menu-bar item; Watt remembers that choice.
 
-On first use, macOS may ask Watt for access to the `Claude Code-credentials` Keychain item. Choose **Allow** or **Always Allow**. Watt extracts the OAuth access token in memory and stores its own app-restricted copy in the user's login Keychain—never in the project or UserDefaults. The login Keychain is used intentionally so locally/ad-hoc signed builds work without a paid signing-team Keychain entitlement.
+On first use, macOS may ask Watt for access to the `Claude Code-credentials` Keychain item. Choose **Allow** or **Always Allow**. Watt keeps the extracted OAuth access token in process memory while it runs and does not copy it into its own persistent storage, the project, or UserDefaults. It rereads Claude Code's item if the token expires. Current versions also remove the legacy `app.watt.Watt.oauth` Keychain item created by early development builds.
 
 For a network-free UI demo showing both harnesses:
 
@@ -86,7 +86,7 @@ Watt is available under the MIT License. See `LICENSE`.
 
 ## Authentication, network, and privacy
 
-For Claude subscription usage, Watt reads only the macOS generic-password item with service `Claude Code-credentials`, then stores its imported token under service `app.watt.Watt.oauth`, account `claude-oauth-access-token`. All credential fixtures are synthetic. No real credential, username, home-directory path, or machine-specific configuration is included in this repository.
+For Claude subscription usage, Watt reads only the macOS generic-password item with service `Claude Code-credentials`. It keeps the extracted token only in process memory and clears its cached value before retrying an unauthorized request. All credential fixtures are synthetic. No real credential, username, home-directory path, or machine-specific configuration is included in this repository.
 
 Claude usage is requested directly from Anthropic:
 
@@ -100,9 +100,9 @@ The endpoint is internal and undocumented, so all endpoint headers, response DTO
 
 If the Keychain subscription credential is absent, Watt checks `claude auth status --json` once and recognizes environment-token, API-key, Bedrock, Vertex, and Foundry configurations. Those configurations remain visible in Watt with an explanation that personal subscription quota is unavailable; Watt does not import their secrets. Set `WATT_CLAUDE_PATH` when testing a non-standard Claude CLI location.
 
-For Codex, Watt looks for the CLI in the current `PATH`, Homebrew locations, `~/.local/bin`, `~/.codex/bin`, and the Codex app bundle. It starts one long-lived `codex app-server` child process and uses the documented JSONL protocol methods `account/read` and `account/rateLimits/read`. Codex retains ownership of authentication and token refresh; Watt never reads or copies Codex credentials. API-key and Bedrock configurations are detected but do not expose ChatGPT subscription limits.
+For Codex, Watt looks for the CLI in Homebrew locations, common user installation directories, the Codex app bundle, and the current `PATH`. It starts one long-lived `codex app-server` child process and uses its generated JSONL protocol methods `account/read` and `account/rateLimits/read`. The CLI currently labels app-server as experimental, so Watt isolates this integration and may need compatibility updates as Codex evolves. Codex retains ownership of authentication and token refresh; Watt never reads or copies Codex credentials. API-key and Bedrock configurations are detected but do not expose ChatGPT subscription limits.
 
-Set `WATT_CODEX_PATH` to an executable path when testing a non-standard Codex installation.
+Set `WATT_CODEX_PATH` to an executable path when testing a non-standard Codex installation. Watt resolves symlinks and rejects CLI binaries writable by group members or other users; the same validation applies to `WATT_CLAUDE_PATH`.
 
 ## Development
 
@@ -111,4 +111,4 @@ swift build
 swift test
 ```
 
-Codex normally refreshes every 60 seconds and Claude every 5 minutes. Each harness has an independent schedule, so one provider succeeding cannot cancel another provider's backoff. Opening the popover refreshes only stale providers. Claude 429 responses honor `Retry-After` and otherwise back off through 5, 15, 30, and 60 minute intervals with jitter. The last result and provider cooldown are cached in `~/Library/Application Support/Watt/usage-cache.json`, preventing menu opens and app relaunches from repeatedly hitting a throttled endpoint. UserDefaults contains only HUD visibility and position; credentials remain in Keychain.
+Codex normally refreshes every 60 seconds and Claude every 5 minutes. Each harness has an independent schedule, so one provider succeeding cannot cancel another provider's backoff. Opening the popover refreshes only stale providers. Claude 429 responses honor `Retry-After` and otherwise back off through 5, 15, 30, and 60 minute intervals with jitter. The last result and provider cooldown are cached in `~/Library/Application Support/Watt/usage-cache.json`, preventing menu opens and app relaunches from repeatedly hitting a throttled endpoint. UserDefaults contains only HUD visibility and position; Claude Code and Codex retain ownership of their credentials in Keychain and their own configuration.

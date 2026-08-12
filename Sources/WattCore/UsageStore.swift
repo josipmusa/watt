@@ -6,6 +6,7 @@ import Foundation
 public final class UsageStore: ObservableObject {
     @Published public private(set) var states: [HarnessUsageState] = []
     @Published public private(set) var isRefreshing = false
+    @Published public private(set) var refreshingHarnesses: Set<HarnessKind> = []
     @Published public private(set) var hasCompletedDiscovery = false
 
     private let providers: [any HarnessUsageProviding]
@@ -74,21 +75,24 @@ public final class UsageStore: ObservableObject {
         states.compactMap(\.snapshot)
     }
 
-    public var latestFetchedAt: Date? {
-        snapshots.map(\.fetchedAt).max()
+    public func isRefreshing(_ harness: HarnessKind) -> Bool {
+        refreshingHarnesses.contains(harness)
     }
 
-    public var hasStaleData: Bool {
-        states.contains { state in
-            if state.failure != nil { return true }
-            guard let fetchedAt = state.snapshot?.fetchedAt else { return false }
-            let staleAfter = max(180, (policies[state.harness]?.successDelay ?? 60) * 2)
-            return now().timeIntervalSince(fetchedAt) > staleAfter
+    public func isDataStale(for state: HarnessUsageState) -> Bool {
+        guard let fetchedAt = state.snapshot?.fetchedAt else { return false }
+        let staleAfter = max(180, (policies[state.harness]?.successDelay ?? 60) * 2)
+        return now().timeIntervalSince(fetchedAt) > staleAfter
+    }
+
+    /// A failed refresh does not make a recent, usable snapshot stale. Surface
+    /// the failure once its provider-specific freshness window has elapsed.
+    public func warningMessage(for state: HarnessUsageState) -> String? {
+        if state.snapshot == nil {
+            return state.failure?.message
         }
-    }
-
-    public var combinedErrorMessage: String? {
-        states.compactMap(\.failure?.message).first
+        guard isDataStale(for: state) else { return nil }
+        return state.failure?.message ?? "\(state.harness.name) usage data may be stale."
     }
 
     public func start() {
@@ -123,6 +127,7 @@ public final class UsageStore: ObservableObject {
         }
 
         isRefreshing = true
+        refreshingHarnesses = Set(selectedProviders.map(\.harness))
         refreshTask = Task { [weak self, selectedProviders] in
             let outcomes = await withTaskGroup(of: ProviderOutcome.self, returning: [ProviderOutcome].self) { group in
                 for provider in selectedProviders {
@@ -176,6 +181,7 @@ public final class UsageStore: ObservableObject {
         hasCompletedDiscovery = true
         refreshTask = nil
         isRefreshing = false
+        refreshingHarnesses = []
 
         saveCache()
         scheduleNextRefresh()

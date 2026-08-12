@@ -40,7 +40,9 @@ archive_path="$dist_dir/$archive_name"
 checksum_path="$archive_path.sha256"
 rm -f "$archive_path" "$checksum_path"
 
-ditto -c -k --sequesterRsrc --keepParent "$app_path" "$archive_path"
+# Release archives do not need resource forks, Finder metadata, extended
+# attributes, or the corresponding __MACOSX AppleDouble entries.
+COPYFILE_DISABLE=1 ditto -c -k --norsrc --noextattr --keepParent "$app_path" "$archive_path"
 checksum="$(shasum -a 256 "$archive_path" | awk '{print $1}')"
 print -r -- "$checksum  $archive_name" > "$checksum_path"
 

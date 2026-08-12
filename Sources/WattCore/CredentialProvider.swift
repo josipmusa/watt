@@ -2,8 +2,8 @@ import Foundation
 import Security
 
 public protocol CredentialProviding: Sendable {
-    func accessToken(forceClaudeImport: Bool) throws -> String
-    func discardImportedCredential() throws
+    func accessToken(forceReload: Bool) throws -> String
+    func discardCachedCredential()
 }
 
 public enum CredentialError: LocalizedError, Sendable {
@@ -26,17 +26,21 @@ public final class ClaudeCodeCredentialProvider: CredentialProviding, @unchecked
     private let wattService = "app.watt.Watt.oauth"
     private let wattAccount = "claude-oauth-access-token"
     private let lock = NSLock()
+    private var cachedToken: String?
 
     public init() {}
 
-    public func accessToken(forceClaudeImport: Bool) throws -> String {
+    public func accessToken(forceReload: Bool) throws -> String {
         lock.lock()
         defer { lock.unlock() }
 
-        if !forceClaudeImport, let cached = try readImportedCredential(),
-           let token = String(data: cached, encoding: .utf8), !token.isEmpty {
-            return token
-        }
+        if !forceReload, let cachedToken { return cachedToken }
+
+        // Watt versions before 1.0 copied this token into a second Keychain
+        // item. Remove that legacy copy opportunistically; reading Claude
+        // Code's own item avoids retaining a credential after Claude logs out
+        // or Watt is removed.
+        discardLegacyImportedCredential()
 
         let claudeCredential = try read(service: claudeService, account: nil, dataProtection: true)
             ?? read(service: claudeService, account: nil, dataProtection: false)
@@ -44,18 +48,14 @@ public final class ClaudeCodeCredentialProvider: CredentialProviding, @unchecked
             throw CredentialError.notFound
         }
         let token = try Self.extractAccessToken(from: claudeCredential)
-        // Claude Code currently stores its OAuth blob in the user's classic login
-        // Keychain. Watt does the same for its private copy so locally/ad-hoc signed
-        // builds do not require a provisioning-team keychain access group.
-        try write(Data(token.utf8), service: wattService, account: wattAccount, dataProtection: false)
+        cachedToken = token
         return token
     }
 
-    public func discardImportedCredential() throws {
+    public func discardCachedCredential() {
         lock.lock()
-        defer { lock.unlock() }
-        try delete(service: wattService, account: wattAccount, dataProtection: true)
-        try delete(service: wattService, account: wattAccount, dataProtection: false)
+        cachedToken = nil
+        lock.unlock()
     }
 
     static func extractAccessToken(from data: Data) throws -> String {
@@ -90,23 +90,10 @@ public final class ClaudeCodeCredentialProvider: CredentialProviding, @unchecked
         return data
     }
 
-    private func readImportedCredential() throws -> Data? {
-        try read(service: wattService, account: wattAccount, dataProtection: true)
-            ?? read(service: wattService, account: wattAccount, dataProtection: false)
-    }
-
-    private func write(_ data: Data, service: String, account: String, dataProtection: Bool) throws {
-        let query = baseQuery(service: service, account: account, dataProtection: dataProtection)
-        let update = [kSecValueData as String: data]
-        let status = SecItemUpdate(query as CFDictionary, update as CFDictionary)
-        if status == errSecItemNotFound {
-            var addition = query
-            addition[kSecValueData as String] = data
-            let addStatus = SecItemAdd(addition as CFDictionary, nil)
-            guard addStatus == errSecSuccess else { throw CredentialError.keychain(addStatus) }
-        } else if status != errSecSuccess {
-            throw CredentialError.keychain(status)
-        }
+    private func discardLegacyImportedCredential() {
+        // Cleanup must never prevent Watt from reading Claude's current item.
+        try? delete(service: wattService, account: wattAccount, dataProtection: true)
+        try? delete(service: wattService, account: wattAccount, dataProtection: false)
     }
 
     private func delete(service: String, account: String, dataProtection: Bool) throws {

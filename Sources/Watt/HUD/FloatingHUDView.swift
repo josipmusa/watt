@@ -117,18 +117,6 @@ struct FloatingHUDView: View {
             Divider().opacity(0.45).padding(.horizontal, 12)
 
             HStack(spacing: 12) {
-                if store.hasStaleData {
-                    Image(systemName: "exclamationmark.triangle.fill")
-                        .font(.system(size: 9, weight: .semibold))
-                        .foregroundStyle(.orange)
-                        .help(store.combinedErrorMessage ?? "Usage data may be stale")
-                }
-
-                Text(UsageFormatting.updatedText(fetchedAt: store.latestFetchedAt, isRefreshing: store.isRefreshing))
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .monospacedDigit()
-
                 Spacer()
 
                 Button { store.refresh(reason: .manual) } label: {
@@ -147,24 +135,32 @@ struct FloatingHUDView: View {
                 .help("Hide floating HUD")
             }
             .padding(.horizontal, 15)
-            .frame(height: 44)
+            .frame(height: 40)
         }
     }
 
     private func expandedSection(_ state: HarnessUsageState) -> some View {
         VStack(alignment: .leading, spacing: 0) {
-            HStack {
+            HStack(spacing: 7) {
                 HarnessMark(harness: state.harness)
                 Spacer()
-                if state.failure != nil {
-                    Image(systemName: "exclamationmark.circle.fill")
-                        .font(.system(size: 10))
-                        .foregroundStyle(.secondary)
-                        .help(state.failure?.message ?? "Usage unavailable")
+                if let warning = store.warningMessage(for: state) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .font(.system(size: 9, weight: .semibold))
+                        .foregroundStyle(.orange)
+                        .help(warning)
                 }
+                Text(UsageFormatting.updatedText(
+                    fetchedAt: state.snapshot?.fetchedAt,
+                    isRefreshing: store.isRefreshing(state.harness)
+                ))
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .monospacedDigit()
             }
             .padding(.horizontal, 15)
-            .frame(height: 30)
+            .padding(.bottom, 5)
+            .frame(height: 39)
 
             if let limits = state.snapshot?.limits {
                 ForEach(limits) { limit in

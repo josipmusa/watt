@@ -39,20 +39,7 @@ struct MenuBarView: View {
         HStack(alignment: .center) {
             Text("Watt")
                 .font(.headline)
-
             Spacer()
-
-            if store.hasStaleData {
-                Image(systemName: "exclamationmark.triangle.fill")
-                    .font(.system(size: 10, weight: .semibold))
-                    .foregroundStyle(.orange)
-                    .help(store.combinedErrorMessage ?? "Usage data may be stale")
-            }
-
-            Text(UsageFormatting.updatedText(fetchedAt: store.latestFetchedAt, isRefreshing: store.isRefreshing))
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .monospacedDigit()
         }
     }
 
@@ -61,7 +48,7 @@ struct MenuBarView: View {
         if store.states.isEmpty {
             emptyState
         } else {
-            VStack(spacing: 12) {
+            VStack(spacing: 14) {
                 ForEach(Array(store.states.enumerated()), id: \.element.id) { index, state in
                     if index > 0 {
                         Divider().opacity(0.42)
@@ -73,16 +60,23 @@ struct MenuBarView: View {
     }
 
     private func providerSection(_ state: HarnessUsageState) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack {
+        VStack(alignment: .leading, spacing: 15) {
+            HStack(spacing: 7) {
                 HarnessMark(harness: state.harness)
                 Spacer()
-                if state.failure != nil {
-                    Image(systemName: "exclamationmark.circle.fill")
-                        .font(.system(size: 10))
-                        .foregroundStyle(.secondary)
-                        .help(state.failure?.message ?? "Usage unavailable")
+                if let warning = store.warningMessage(for: state) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .font(.system(size: 9, weight: .semibold))
+                        .foregroundStyle(.orange)
+                        .help(warning)
                 }
+                Text(UsageFormatting.updatedText(
+                    fetchedAt: state.snapshot?.fetchedAt,
+                    isRefreshing: store.isRefreshing(state.harness)
+                ))
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .monospacedDigit()
             }
 
             if let snapshot = state.snapshot {

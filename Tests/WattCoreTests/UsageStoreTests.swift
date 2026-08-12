@@ -45,7 +45,50 @@ struct UsageStoreTests {
 
         #expect(store.states.first?.snapshot != nil)
         #expect(store.states.first?.failure?.message == "Temporarily unavailable")
-        #expect(store.hasStaleData)
+        #expect(store.warningMessage(for: store.states[0]) == nil)
+    }
+
+    @Test func providerWithoutUsableDataWarnsImmediately() async {
+        let store = UsageStore(providers: [
+            StubProvider(harness: .claude, result: .failure(.temporary)),
+        ])
+
+        store.start()
+        while store.isRefreshing { await Task.yield() }
+
+        #expect(store.states[0].snapshot == nil)
+        #expect(store.warningMessage(for: store.states[0]) == "Temporarily unavailable")
+    }
+
+    @Test func recentSnapshotDoesNotWarnAfterFailedRefresh() async {
+        let clock = TestClock(Date(timeIntervalSince1970: 1_800_000_000))
+        let recent = HarnessUsageSnapshot(
+            harness: .claude,
+            limits: HarnessUsageSnapshot.demo(for: .claude).limits,
+            fetchedAt: clock.now
+        )
+        let claude = SequencedProvider(
+            harness: .claude,
+            results: [.success(recent), .failure(.temporary)]
+        )
+        let store = UsageStore(
+            providers: [claude],
+            policies: [.claude: RefreshPolicy(successDelay: 300, failureDelays: [300])],
+            now: { clock.now },
+            jitteredDelay: { $0 }
+        )
+
+        store.start()
+        while store.isRefreshing { await Task.yield() }
+        clock.advance(by: 40)
+        store.refresh(reason: .manual)
+        while store.isRefreshing { await Task.yield() }
+
+        #expect(store.states[0].failure != nil)
+        #expect(store.warningMessage(for: store.states[0]) == nil)
+
+        clock.advance(by: 561)
+        #expect(store.warningMessage(for: store.states[0]) == "Temporarily unavailable")
     }
 
     @Test func healthyCodexDoesNotResetClaudeBackoff() async {

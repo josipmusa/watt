@@ -52,6 +52,8 @@ public enum CodexUsageError: HarnessUsageProviderError, Equatable, Sendable {
 public actor CodexAppServerUsageProvider: HarnessUsageProviding {
     public nonisolated let harness = HarnessKind.codex
 
+    // `codex app-server` is currently experimental. Keep all protocol details
+    // in this provider/client pair so schema changes remain localized.
     private let executableResolver: @Sendable () -> URL?
     private let configurationDetector: @Sendable () -> Bool
     private let now: @Sendable () -> Date
@@ -172,9 +174,6 @@ public enum CodexCLIResolver {
         if let override = environment["WATT_CODEX_PATH"], !override.isEmpty {
             paths.append(override)
         }
-        if let path = environment["PATH"] {
-            paths.append(contentsOf: path.split(separator: ":").map { "\($0)/codex" })
-        }
         paths.append(contentsOf: [
             "/opt/homebrew/bin/codex",
             "/usr/local/bin/codex",
@@ -190,14 +189,11 @@ public enum CodexCLIResolver {
             "/Applications/Codex.app/Contents/Resources/codex",
         ])
         paths.append(contentsOf: versionManagerCandidates(homeDirectory: homeDirectory, fileManager: fileManager))
-
-        var seen = Set<String>()
-        for path in paths where seen.insert(path).inserted {
-            if fileManager.isExecutableFile(atPath: path) {
-                return URL(fileURLWithPath: path)
-            }
+        if let path = environment["PATH"] {
+            paths.append(contentsOf: path.split(separator: ":").map { "\($0)/codex" })
         }
-        return nil
+
+        return LocalExecutableResolver.firstTrusted(in: paths, fileManager: fileManager)
     }
 
     public static func hasConfiguration(
@@ -226,6 +222,44 @@ public enum CodexCLIResolver {
             )) ?? []
             return versions.map { $0.appendingPathComponent("bin/codex").path }
         }
+    }
+}
+
+enum LocalExecutableResolver {
+    /// Resolve symlinks before launching and reject binaries that another local
+    /// user could replace directly. Explicit WATT_* overrides still use this
+    /// check; they are an escape hatch for location, not for unsafe permissions.
+    static func firstTrusted(in paths: [String], fileManager: FileManager = .default) -> URL? {
+        var seen = Set<String>()
+        for path in paths {
+            let resolved = URL(fileURLWithPath: path).standardizedFileURL.resolvingSymlinksInPath()
+            guard seen.insert(resolved.path).inserted,
+                  isTrustedExecutable(resolved, fileManager: fileManager) else { continue }
+            return resolved
+        }
+        return nil
+    }
+
+    static func isTrustedExecutable(_ url: URL, fileManager: FileManager = .default) -> Bool {
+        guard fileManager.isExecutableFile(atPath: url.path),
+              let attributes = try? fileManager.attributesOfItem(atPath: url.path),
+              attributes[.type] as? FileAttributeType == .typeRegular,
+              let ownerID = attributes[.ownerAccountID] as? NSNumber,
+              let permissions = attributes[.posixPermissions] as? NSNumber,
+              hasTrustedOwnership(ownerID: ownerID, permissions: permissions),
+              let parentAttributes = try? fileManager.attributesOfItem(
+                  atPath: url.deletingLastPathComponent().path
+              ),
+              let parentOwnerID = parentAttributes[.ownerAccountID] as? NSNumber,
+              let parentPermissions = parentAttributes[.posixPermissions] as? NSNumber else { return false }
+
+        return hasTrustedOwnership(ownerID: parentOwnerID, permissions: parentPermissions)
+    }
+
+    private static func hasTrustedOwnership(ownerID: NSNumber, permissions: NSNumber) -> Bool {
+        let owner = ownerID.uint32Value
+        guard owner == 0 || owner == getuid() else { return false }
+        return permissions.uint16Value & 0o022 == 0
     }
 }
 

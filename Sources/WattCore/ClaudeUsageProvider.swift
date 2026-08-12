@@ -73,17 +73,17 @@ public actor ClaudeOAuthUsageProvider: HarnessUsageProviding {
 
     public func fetchUsage() async throws -> HarnessUsageSnapshot {
         do {
-            return try await request(forceClaudeImport: false)
+            return try await request(forceCredentialReload: false)
         } catch ClaudeUsageError.unauthorized {
-            try? credentials.discardImportedCredential()
-            return try await request(forceClaudeImport: true)
+            credentials.discardCachedCredential()
+            return try await request(forceCredentialReload: true)
         }
     }
 
-    private func request(forceClaudeImport: Bool) async throws -> HarnessUsageSnapshot {
+    private func request(forceCredentialReload: Bool) async throws -> HarnessUsageSnapshot {
         let token: String
         do {
-            token = try credentials.accessToken(forceClaudeImport: forceClaudeImport)
+            token = try credentials.accessToken(forceReload: forceCredentialReload)
         } catch CredentialError.notFound {
             switch await configurationDetector() {
             case .notConfigured:
@@ -259,9 +259,6 @@ public enum ClaudeConfigurationDetector {
         if let override = environment["WATT_CLAUDE_PATH"], !override.isEmpty {
             paths.append(override)
         }
-        if let path = environment["PATH"] {
-            paths.append(contentsOf: path.split(separator: ":").map { "\($0)/claude" })
-        }
         paths.append(contentsOf: [
             "/opt/homebrew/bin/claude",
             "/usr/local/bin/claude",
@@ -274,32 +271,19 @@ public enum ClaudeConfigurationDetector {
             homeDirectory.appendingPathComponent(".local/share/mise/shims/claude").path,
             homeDirectory.appendingPathComponent("Library/pnpm/claude").path,
         ])
-        return paths.lazy
-            .map { URL(fileURLWithPath: $0) }
-            .first { fileManager.isExecutableFile(atPath: $0.path) }
+        if let path = environment["PATH"] {
+            paths.append(contentsOf: path.split(separator: ":").map { "\($0)/claude" })
+        }
+        return LocalExecutableResolver.firstTrusted(in: paths, fileManager: fileManager)
     }
 
-    private static func runAuthStatus(executable: URL) async -> Data? {
-        await withCheckedContinuation { continuation in
-            let process = Process()
-            let output = Pipe()
-            process.executableURL = executable
-            process.arguments = ["auth", "status", "--json"]
-            process.standardOutput = output
-            process.standardError = FileHandle.nullDevice
-            process.terminationHandler = { process in
-                guard process.terminationStatus == 0 else {
-                    continuation.resume(returning: nil)
-                    return
-                }
-                continuation.resume(returning: output.fileHandleForReading.readDataToEndOfFile())
-            }
-            do {
-                try process.run()
-            } catch {
-                continuation.resume(returning: nil)
-            }
-        }
+    static func runAuthStatus(executable: URL) async -> Data? {
+        await BoundedProcess.run(
+            executable: executable,
+            arguments: ["auth", "status", "--json"],
+            timeout: 10,
+            maximumOutputBytes: 1_048_576
+        )
     }
 
     private static func displayName(for method: String) -> String {
@@ -315,6 +299,131 @@ public enum ClaudeConfigurationDetector {
     private static func isEnabled(_ value: String?) -> Bool {
         guard let value else { return false }
         return ["1", "true", "yes"].contains(value.lowercased())
+    }
+}
+
+enum BoundedProcess {
+    static func run(
+        executable: URL,
+        arguments: [String],
+        timeout: TimeInterval,
+        maximumOutputBytes: Int
+    ) async -> Data? {
+        await withCheckedContinuation { continuation in
+            ProcessCapture(
+                executable: executable,
+                arguments: arguments,
+                timeout: timeout,
+                maximumOutputBytes: maximumOutputBytes,
+                continuation: continuation
+            ).start()
+        }
+    }
+}
+
+private final class ProcessCapture: @unchecked Sendable {
+    private let lock = NSLock()
+    private let executable: URL
+    private let arguments: [String]
+    private let timeout: TimeInterval
+    private let maximumOutputBytes: Int
+    private var continuation: CheckedContinuation<Data?, Never>?
+    private var process: Process?
+    private var outputHandle: FileHandle?
+    private var output = Data()
+    private var timeoutWorkItem: DispatchWorkItem?
+
+    init(
+        executable: URL,
+        arguments: [String],
+        timeout: TimeInterval,
+        maximumOutputBytes: Int,
+        continuation: CheckedContinuation<Data?, Never>
+    ) {
+        self.executable = executable
+        self.arguments = arguments
+        self.timeout = timeout
+        self.maximumOutputBytes = maximumOutputBytes
+        self.continuation = continuation
+    }
+
+    func start() {
+        let process = Process()
+        let pipe = Pipe()
+        process.executableURL = executable
+        process.arguments = arguments
+        process.standardOutput = pipe
+        process.standardError = FileHandle.nullDevice
+        self.process = process
+        outputHandle = pipe.fileHandleForReading
+
+        pipe.fileHandleForReading.readabilityHandler = { handle in
+            self.append(handle.availableData)
+        }
+        process.terminationHandler = { process in
+            self.processTerminated(status: process.terminationStatus)
+        }
+
+        do {
+            try process.run()
+        } catch {
+            finish(with: nil, terminate: false)
+            return
+        }
+
+        let timeoutWorkItem = DispatchWorkItem { [weak self] in
+            self?.finish(with: nil, terminate: true)
+        }
+        self.timeoutWorkItem = timeoutWorkItem
+        DispatchQueue.global(qos: .utility).asyncAfter(
+            deadline: .now() + max(0, timeout),
+            execute: timeoutWorkItem
+        )
+    }
+
+    private func append(_ data: Data) {
+        guard !data.isEmpty else { return }
+        lock.lock()
+        guard continuation != nil else {
+            lock.unlock()
+            return
+        }
+        let exceedsLimit = output.count + data.count > maximumOutputBytes
+        if !exceedsLimit { output.append(data) }
+        lock.unlock()
+        if exceedsLimit { finish(with: nil, terminate: true) }
+    }
+
+    private func processTerminated(status: Int32) {
+        outputHandle?.readabilityHandler = nil
+        if let handle = outputHandle, let trailing = try? handle.readToEnd(), !trailing.isEmpty {
+            append(trailing)
+        }
+
+        lock.lock()
+        let result = status == 0 && output.count <= maximumOutputBytes ? output : nil
+        lock.unlock()
+        finish(with: result, terminate: false)
+    }
+
+    private func finish(with result: Data?, terminate: Bool) {
+        lock.lock()
+        guard let continuation else {
+            lock.unlock()
+            return
+        }
+        self.continuation = nil
+        let process = self.process
+        self.process = nil
+        timeoutWorkItem?.cancel()
+        timeoutWorkItem = nil
+        outputHandle?.readabilityHandler = nil
+        outputHandle = nil
+        process?.terminationHandler = nil
+        lock.unlock()
+
+        if terminate, process?.isRunning == true { process?.terminate() }
+        continuation.resume(returning: result)
     }
 }
 

@@ -35,6 +35,8 @@ cp "$binary_path" "$app_path/Contents/MacOS/Watt"
 cp "$info_plist" "$app_path/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $version" "$app_path/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $build_number" "$app_path/Contents/Info.plist"
-codesign --force --sign - "$app_path"
+# Harden even local/ad-hoc builds. This does not require an Apple Developer
+# account and keeps the packaged app aligned with the Xcode target's settings.
+codesign --force --options runtime --sign - "$app_path"
 
 echo "$app_path"

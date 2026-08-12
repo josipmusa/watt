@@ -36,5 +36,31 @@ struct CodexUsageProviderTests {
     @Test func findsStandardCodexInstallation() {
         let found = CodexCLIResolver.findExecutable()
         #expect(found == nil || FileManager.default.isExecutableFile(atPath: found!.path))
+        if FileManager.default.isExecutableFile(atPath: "/opt/homebrew/bin/codex") {
+            #expect(found != nil)
+        }
+    }
+
+    @Test func resolverRejectsWritableExecutableAndResolvesSymlink() throws {
+        let fileManager = FileManager.default
+        let directory = fileManager.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? fileManager.removeItem(at: directory) }
+
+        let executable = directory.appendingPathComponent("codex-real")
+        try Data("#!/bin/sh\n".utf8).write(to: executable)
+        try fileManager.setAttributes([.posixPermissions: 0o755], ofItemAtPath: executable.path)
+        let link = directory.appendingPathComponent("codex")
+        try fileManager.createSymbolicLink(at: link, withDestinationURL: executable)
+
+        #expect(LocalExecutableResolver.firstTrusted(in: [link.path]) == executable)
+
+        try fileManager.setAttributes([.posixPermissions: 0o777], ofItemAtPath: executable.path)
+        #expect(LocalExecutableResolver.firstTrusted(in: [link.path]) == nil)
+
+        try fileManager.setAttributes([.posixPermissions: 0o755], ofItemAtPath: executable.path)
+        try fileManager.setAttributes([.posixPermissions: 0o777], ofItemAtPath: directory.path)
+        #expect(LocalExecutableResolver.firstTrusted(in: [link.path]) == nil)
     }
 }
