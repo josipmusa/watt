@@ -1,4 +1,8 @@
-# Watt
+<p align="center">
+  <img src="docs/images/watt-icon.png" width="144" alt="Watt app icon">
+</p>
+
+<h1 align="center">Watt</h1>
 
 Watt is a lightweight, native macOS menu-bar app for monitoring Claude Code and Codex subscription usage. It detects Claude Code and Codex when they are installed, shows the limits that matter at a glance, and stays out of the Dock.
 
