@@ -29,6 +29,15 @@ struct MenuBarView: View {
         }
         .frame(width: 330)
         .background(.background)
+        // MenuBarExtra's window can inherit text-selection cursor regions from
+        // its SwiftUI content. Disable selection semantically, then explicitly
+        // claim the standard pointer on systems that support pointer styles.
+        .textSelection(.disabled)
+        .modifier(HUDPointerStyle())
+        .overlay {
+            HUDCursorGuard()
+                .accessibilityHidden(true)
+        }
         .onAppear {
             store.refresh(reason: .popover)
             refreshLoginItemStatus()
@@ -232,5 +241,78 @@ struct MenuBarView: View {
     private func displayedLimits(in snapshot: HarnessUsageSnapshot) -> [UsageLimit] {
         guard snapshot.harness == .codex else { return snapshot.limits }
         return MenuBarMetric.weekly.limit(in: snapshot).map { [$0] } ?? []
+    }
+}
+
+private struct HUDPointerStyle: ViewModifier {
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if #available(macOS 15.0, *) {
+            content.pointerStyle(.default)
+        } else {
+            content
+        }
+    }
+}
+
+/// Keeps Watt's cursor independent from whichever application is active below
+/// its nonactivating menu-bar window. Cursor rects alone are ignored while an
+/// application is inactive, so the active-always tracking area also responds to
+/// cursor updates and mouse movement. Returning nil from hitTest preserves all
+/// SwiftUI control interaction beneath this view.
+private struct HUDCursorGuard: NSViewRepresentable {
+    func makeNSView(context: Context) -> HUDCursorView {
+        HUDCursorView()
+    }
+
+    func updateNSView(_ nsView: HUDCursorView, context: Context) {
+        nsView.window?.invalidateCursorRects(for: nsView)
+    }
+}
+
+private final class HUDCursorView: NSView {
+    private var cursorTrackingArea: NSTrackingArea?
+
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        nil
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        window?.acceptsMouseMovedEvents = true
+        window?.invalidateCursorRects(for: self)
+    }
+
+    override func updateTrackingAreas() {
+        if let cursorTrackingArea {
+            removeTrackingArea(cursorTrackingArea)
+        }
+
+        let trackingArea = NSTrackingArea(
+            rect: .zero,
+            options: [.activeAlways, .inVisibleRect, .cursorUpdate, .mouseEnteredAndExited, .mouseMoved],
+            owner: self,
+            userInfo: nil
+        )
+        addTrackingArea(trackingArea)
+        cursorTrackingArea = trackingArea
+        super.updateTrackingAreas()
+    }
+
+    override func resetCursorRects() {
+        discardCursorRects()
+        addCursorRect(visibleRect, cursor: .arrow)
+    }
+
+    override func cursorUpdate(with event: NSEvent) {
+        NSCursor.arrow.set()
+    }
+
+    override func mouseEntered(with event: NSEvent) {
+        NSCursor.arrow.set()
+    }
+
+    override func mouseMoved(with event: NSEvent) {
+        NSCursor.arrow.set()
     }
 }
