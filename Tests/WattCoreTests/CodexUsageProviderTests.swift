@@ -60,6 +60,14 @@ struct CodexUsageProviderTests {
         }
     }
 
+    @Test func checksCodexBundledWithChatGPT() {
+        let homeDirectory = URL(fileURLWithPath: "/Users/example", isDirectory: true)
+        let candidates = CodexCLIResolver.applicationBundleCandidates(homeDirectory: homeDirectory)
+
+        #expect(candidates.contains("/Applications/ChatGPT.app/Contents/Resources/codex"))
+        #expect(candidates.contains("/Users/example/Applications/ChatGPT.app/Contents/Resources/codex"))
+    }
+
     @Test func resolverRejectsWritableExecutableAndResolvesSymlink() throws {
         let fileManager = FileManager.default
         let directory = fileManager.temporaryDirectory

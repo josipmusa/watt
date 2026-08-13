@@ -190,9 +190,8 @@ public enum CodexCLIResolver {
             homeDirectory.appendingPathComponent(".asdf/shims/codex").path,
             homeDirectory.appendingPathComponent(".local/share/mise/shims/codex").path,
             homeDirectory.appendingPathComponent("Library/pnpm/codex").path,
-            "/Applications/Codex.app/Contents/MacOS/codex",
-            "/Applications/Codex.app/Contents/Resources/codex",
         ])
+        paths.append(contentsOf: applicationBundleCandidates(homeDirectory: homeDirectory))
         paths.append(contentsOf: versionManagerCandidates(homeDirectory: homeDirectory, fileManager: fileManager))
         if let path = environment["PATH"] {
             paths.append(contentsOf: path.split(separator: ":").map { "\($0)/codex" })
@@ -208,6 +207,22 @@ public enum CodexCLIResolver {
         let codexHome = homeDirectory.appendingPathComponent(".codex", isDirectory: true)
         return ["auth.json", "config.toml"].contains {
             fileManager.fileExists(atPath: codexHome.appendingPathComponent($0).path)
+        }
+    }
+
+    static func applicationBundleCandidates(homeDirectory: URL) -> [String] {
+        let applicationDirectories = [
+            URL(fileURLWithPath: "/Applications", isDirectory: true),
+            homeDirectory.appendingPathComponent("Applications", isDirectory: true),
+        ]
+        let relativePaths = [
+            "Codex.app/Contents/MacOS/codex",
+            "Codex.app/Contents/Resources/codex",
+            "ChatGPT.app/Contents/Resources/codex",
+        ]
+
+        return applicationDirectories.flatMap { directory in
+            relativePaths.map { directory.appendingPathComponent($0).path }
         }
     }
 
