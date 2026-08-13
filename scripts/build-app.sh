@@ -33,6 +33,7 @@ rm -rf "$app_path"
 mkdir -p "$app_path/Contents/MacOS" "$app_path/Contents/Resources"
 cp "$binary_path" "$app_path/Contents/MacOS/Watt"
 cp "$info_plist" "$app_path/Contents/Info.plist"
+cp "$project_dir/Resources/Watt.icns" "$app_path/Contents/Resources/Watt.icns"
 /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $version" "$app_path/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $build_number" "$app_path/Contents/Info.plist"
 # Harden even local/ad-hoc builds. This does not require an Apple Developer
