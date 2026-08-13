@@ -5,27 +5,27 @@ import WattCore
 
 struct MenuBarView: View {
     @ObservedObject var store: UsageStore
-    @ObservedObject var hud: FloatingHUDController
+    @Binding var claudeMenuBarMetric: String
     @State private var launchAtLogin = SMAppService.mainApp.status == .enabled
     @State private var loginItemMessage: String?
 
     var body: some View {
         VStack(spacing: 0) {
             header
-                .padding(.horizontal, 15)
-                .padding(.top, 12)
-                .padding(.bottom, 10)
+                .padding(.horizontal, 16)
+                .frame(height: 43)
 
             Divider().opacity(0.42)
 
             usage
-                .padding(.horizontal, 15)
-                .padding(.vertical, 12)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 14)
 
             Divider().opacity(0.55)
 
             controls
-                .padding(9)
+                .padding(.horizontal, 11)
+                .padding(.vertical, 10)
         }
         .frame(width: 330)
         .background(.background)
@@ -36,10 +36,24 @@ struct MenuBarView: View {
     }
 
     private var header: some View {
-        HStack(alignment: .center) {
+        HStack(spacing: 7) {
+            Image(systemName: "bolt.fill")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(.secondary)
             Text("Watt")
-                .font(.headline)
+                .font(.system(size: 14, weight: .semibold))
             Spacer()
+
+            Button {
+                store.refresh(reason: .manual)
+            } label: {
+                Image(systemName: "arrow.clockwise")
+                    .rotationEffect(.degrees(store.isRefreshing ? 360 : 0))
+                    .animation(store.isRefreshing ? .linear(duration: 0.8).repeatForever(autoreverses: false) : .default, value: store.isRefreshing)
+            }
+            .buttonStyle(.plain)
+            .disabled(store.isRefreshing)
+            .help("Refresh usage")
         }
     }
 
@@ -63,6 +77,13 @@ struct MenuBarView: View {
         VStack(alignment: .leading, spacing: 15) {
             HStack(spacing: 7) {
                 HarnessMark(harness: state.harness)
+                if state.harness == .claude {
+                    claudeMetricPicker
+                } else {
+                    Text("Weekly")
+                        .font(.system(size: 10.5, weight: .medium))
+                        .foregroundStyle(.secondary)
+                }
                 Spacer()
                 if let warning = store.warningMessage(for: state) {
                     Image(systemName: "exclamationmark.triangle.fill")
@@ -81,16 +102,17 @@ struct MenuBarView: View {
 
             if let snapshot = state.snapshot {
                 HStack(alignment: .top, spacing: 10) {
-                    ForEach(snapshot.limits) { limit in
-                        VStack(spacing: 5) {
+                    ForEach(displayedLimits(in: snapshot)) { limit in
+                        VStack(spacing: 6) {
                             UsageRing(limit: limit, harness: state.harness, size: 58, lineWidth: 4)
                             Text(limit.name)
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                             Text(shortReset(for: limit))
-                                .font(.system(size: 9.5))
-                                .foregroundStyle(.tertiary)
+                                .font(.system(size: 11, weight: .medium))
+                                .foregroundStyle(.secondary)
                                 .lineLimit(1)
+                                .minimumScaleFactor(0.85)
                                 .help(UsageFormatting.resetText(for: limit))
                         }
                         .frame(maxWidth: .infinity)
@@ -126,31 +148,6 @@ struct MenuBarView: View {
     private var controls: some View {
         VStack(alignment: .leading, spacing: 7) {
             HStack(spacing: 8) {
-                Toggle(isOn: Binding(get: { hud.isVisible }, set: { hud.setVisible($0) })) {
-                    Label("Keep Visible", systemImage: "pin")
-                }
-                .toggleStyle(.switch)
-                .controlSize(.small)
-
-                Spacer()
-
-                Button {
-                    store.refresh(reason: .manual)
-                } label: {
-                    Image(systemName: "arrow.clockwise")
-                        .rotationEffect(.degrees(store.isRefreshing ? 360 : 0))
-                        .animation(store.isRefreshing ? .linear(duration: 0.8).repeatForever(autoreverses: false) : .default, value: store.isRefreshing)
-                }
-                .buttonStyle(.borderless)
-                .disabled(store.isRefreshing)
-                .help("Refresh usage")
-
-                Button("Quit") { NSApplication.shared.terminate(nil) }
-                    .buttonStyle(.borderless)
-                    .keyboardShortcut("q")
-            }
-
-            HStack(spacing: 6) {
                 Toggle(isOn: Binding(get: { launchAtLogin }, set: setLaunchAtLogin)) {
                     Label("Launch at Login", systemImage: "power")
                 }
@@ -163,9 +160,43 @@ struct MenuBarView: View {
                         .foregroundStyle(.secondary)
                         .help(loginItemMessage)
                 }
+
+                Spacer()
+
+                Button("Quit") { NSApplication.shared.terminate(nil) }
+                    .buttonStyle(.borderless)
+                    .keyboardShortcut("q")
             }
         }
         .font(.system(size: 12.5))
+    }
+
+    private var claudeMetricPicker: some View {
+        let selected = MenuBarMetric(rawValue: claudeMenuBarMetric) ?? .weekly
+
+        return Menu {
+            ForEach(MenuBarMetric.allCases) { metric in
+                Button {
+                    claudeMenuBarMetric = metric.rawValue
+                } label: {
+                    if metric == selected {
+                        Label(metric.name(for: .claude), systemImage: "checkmark")
+                    } else {
+                        Text(metric.name(for: .claude))
+                    }
+                }
+            }
+        } label: {
+            HStack(spacing: 3) {
+                Image(systemName: "menubar.rectangle")
+                Text(selected.name(for: .claude))
+            }
+            .font(.system(size: 10.5, weight: .medium))
+            .foregroundStyle(.secondary)
+        }
+        .menuStyle(.borderlessButton)
+        .fixedSize()
+        .help("Metric shown in the menu bar")
     }
 
     private func refreshLoginItemStatus() {
@@ -193,6 +224,13 @@ struct MenuBarView: View {
         guard let date = limit.resetDate else { return "—" }
         let formatter = RelativeDateTimeFormatter()
         formatter.unitsStyle = .short
-        return formatter.localizedString(for: date, relativeTo: .now)
+        let relative = formatter.localizedString(for: date, relativeTo: .now)
+        let time = date.formatted(date: .omitted, time: .shortened)
+        return "\(relative) · \(time)"
+    }
+
+    private func displayedLimits(in snapshot: HarnessUsageSnapshot) -> [UsageLimit] {
+        guard snapshot.harness == .codex else { return snapshot.limits }
+        return MenuBarMetric.weekly.limit(in: snapshot).map { [$0] } ?? []
     }
 }

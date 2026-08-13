@@ -13,7 +13,7 @@ open .build/Watt.app
 
 The script builds, packages, and ad-hoc signs `.build/Watt.app` with Apple's hardened runtime enabled. Full Xcode is optional; open `Watt.xcodeproj` if you prefer its Run workflow. To keep Watt in a stable location, drag the built app into `/Applications` and open that copy.
 
-On first launch, Watt discovers supported harnesses and shows one compact HUD row per configured harness. Turn off **Keep Visible** in the menu-bar popover if you want to use only the menu-bar item; Watt remembers that choice.
+On first launch, Watt discovers supported harnesses and shows a readable usage summary directly in the menu bar without covering app content. A bolt identifies Watt; the opened panel uses a warm Claude accent and cool Codex accent with a small mark for each provider. Claude can show Session, Weekly, or Fable usage; Codex shows Weekly usage. Open Watt and use the picker beside Claude to change its menu-bar metric.
 
 On first use, macOS may ask Watt for access to the `Claude Code-credentials` Keychain item. Choose **Allow** or **Always Allow**. Watt keeps the extracted OAuth access token in process memory while it runs and does not copy it into its own persistent storage, the project, or UserDefaults. It rereads Claude Code's item if the token expires. Current versions also remove the legacy `app.watt.Watt.oauth` Keychain item created by early development builds.
 
@@ -21,10 +21,10 @@ For a network-free UI demo showing both harnesses:
 
 ```sh
 ./scripts/build-app.sh debug
-open -n .build/Watt.app --args --demo --show-hud
+open -n .build/Watt.app --args --demo
 ```
 
-Add `--expanded-hud` to start with the HUD expanded. Demo flags exist only in Debug builds.
+Demo flags exist only in Debug builds.
 
 Use `--demo-claude-only` or `--demo-codex-only` instead of `--demo` to preview either single-harness layout.
 
@@ -111,4 +111,4 @@ swift build
 swift test
 ```
 
-Codex normally refreshes every 60 seconds and Claude every 5 minutes. Each harness has an independent schedule, so one provider succeeding cannot cancel another provider's backoff. Opening the popover refreshes only stale providers. Claude 429 responses honor `Retry-After` and otherwise back off through 5, 15, 30, and 60 minute intervals with jitter. The last result and provider cooldown are cached in `~/Library/Application Support/Watt/usage-cache.json`, preventing menu opens and app relaunches from repeatedly hitting a throttled endpoint. UserDefaults contains only HUD visibility and position; Claude Code and Codex retain ownership of their credentials in Keychain and their own configuration.
+Codex normally refreshes every 60 seconds and Claude every 5 minutes. Each harness has an independent schedule, so one provider succeeding cannot cancel another provider's backoff. Opening the popover refreshes only stale providers. Claude 429 responses honor `Retry-After` and otherwise back off through 5, 15, 30, and 60 minute intervals with jitter. The last result and provider cooldown are cached in `~/Library/Application Support/Watt/usage-cache.json`, preventing menu opens and app relaunches from repeatedly hitting a throttled endpoint. Watt stores the selected Claude menu-bar metric in UserDefaults; Claude Code and Codex retain ownership of their credentials in Keychain and their own configuration.

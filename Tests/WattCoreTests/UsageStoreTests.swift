@@ -28,7 +28,7 @@ struct UsageStoreTests {
         while store.isRefreshing { await Task.yield() }
 
         #expect(store.states.map(\.harness) == [.codex])
-        #expect(store.states.first?.snapshot?.limits.count == 2)
+        #expect(store.states.first?.snapshot?.limits.count == 1)
     }
 
     @Test func preservesLastGoodSnapshotWhenOneProviderRefreshFails() async {

@@ -3,7 +3,7 @@ import Testing
 @testable import WattCore
 
 struct CodexUsageProviderTests {
-    @Test func decodesPrimaryAndSecondaryWindows() throws {
+    @Test func decodesOnlyTheWeeklyWindow() throws {
         let fetchedAt = Date(timeIntervalSince1970: 1_800_000_000)
         let data = Data(#"""
         {
@@ -20,10 +20,29 @@ struct CodexUsageProviderTests {
 
         let snapshot = try CodexAppServerUsageProvider.decodeRateLimits(data, fetchedAt: fetchedAt)
         #expect(snapshot.harness == .codex)
-        #expect(snapshot.limits.map(\.name) == ["5 hour", "Weekly"])
-        #expect(snapshot.limits.map(\.percentage) == [23.4, 47])
+        #expect(snapshot.limits.map(\.id) == ["weekly"])
+        #expect(snapshot.limits.map(\.name) == ["Weekly"])
+        #expect(snapshot.limits.map(\.percentage) == [47])
         #expect(snapshot.limits.allSatisfy { $0.resetDate != nil })
         #expect(snapshot.fetchedAt == fetchedAt)
+    }
+
+    @Test func findsWeeklyWindowInPrimaryBucket() throws {
+        let data = Data(#"""
+        {
+          "id": 6,
+          "result": {
+            "rateLimits": {
+              "primary": { "usedPercent": 31, "windowDurationMins": 10080, "resetsAt": 1800604800 },
+              "secondary": null
+            }
+          }
+        }
+        """#.utf8)
+
+        let snapshot = try CodexAppServerUsageProvider.decodeRateLimits(data)
+        #expect(snapshot.limits.first?.id == "weekly")
+        #expect(snapshot.limits.first?.percentage == 31)
     }
 
     @Test func rejectsResponseWithoutUsageWindows() {

@@ -21,6 +21,39 @@ public enum HarnessKind: String, CaseIterable, Codable, Sendable, Identifiable {
     }
 }
 
+public enum MenuBarMetric: String, CaseIterable, Codable, Sendable, Identifiable {
+    case session
+    case weekly
+    case fable
+
+    public var id: Self { self }
+
+    public func name(for harness: HarnessKind) -> String {
+        switch self {
+        case .session: "Session"
+        case .weekly: "Weekly"
+        case .fable: "Fable"
+        }
+    }
+
+    public func limit(in snapshot: HarnessUsageSnapshot) -> UsageLimit? {
+        switch (snapshot.harness, self) {
+        case (.claude, .session):
+            snapshot.limits.first { $0.id == "session" }
+        case (.claude, .weekly):
+            snapshot.limits.first { $0.id == "weekly" }
+        case (.claude, .fable):
+            snapshot.limits.first { $0.id == "fable" }
+        case (.codex, .weekly):
+            snapshot.limits.first { $0.id == "weekly" }
+                ?? snapshot.limits.first { $0.id == "secondary" }
+                ?? snapshot.limits.first { $0.name.caseInsensitiveCompare("Weekly") == .orderedSame }
+        case (.codex, .session), (.codex, .fable):
+            nil
+        }
+    }
+}
+
 public struct UsageLimit: Codable, Equatable, Sendable, Identifiable {
     public let id: String
     public let name: String
@@ -68,8 +101,7 @@ public struct HarnessUsageSnapshot: Codable, Equatable, Sendable, Identifiable {
             HarnessUsageSnapshot(
                 harness: .codex,
                 limits: [
-                    UsageLimit(id: "primary", name: "5 hour", percentage: 23, resetDate: date.addingTimeInterval(1.6 * 3600)),
-                    UsageLimit(id: "secondary", name: "Weekly", percentage: 47, resetDate: date.addingTimeInterval(3.2 * 86_400)),
+                    UsageLimit(id: "weekly", name: "Weekly", percentage: 47, resetDate: date.addingTimeInterval(3.2 * 86_400)),
                 ],
                 fetchedAt: date
             )

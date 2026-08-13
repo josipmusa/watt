@@ -6,7 +6,7 @@ import WattCore
 struct WattApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @StateObject private var store: UsageStore
-    @StateObject private var hud: FloatingHUDController
+    @AppStorage("menuBar.claude.metric") private var claudeMenuBarMetric = MenuBarMetric.weekly.rawValue
 
     init() {
         ProcessInfo.processInfo.disableAutomaticTermination("Watt keeps its menu-bar item available")
@@ -43,32 +43,29 @@ struct WattApp: App {
 
         let store = UsageStore(providers: providers, cacheURL: cacheURL)
         _store = StateObject(wrappedValue: store)
-        let hud = FloatingHUDController(store: store)
-        _hud = StateObject(wrappedValue: hud)
 
         Task { @MainActor in
             store.start()
             try? await Task.sleep(for: .milliseconds(300))
             #if DEBUG
-            if ProcessInfo.processInfo.arguments.contains("--show-hud") {
-                hud.showForPreview(expanded: ProcessInfo.processInfo.arguments.contains("--expanded-hud"))
-            } else {
-                hud.restoreIfNeeded()
-            }
             if ProcessInfo.processInfo.arguments.contains("--show-popover-preview") {
-                DebugPopoverPresenter.shared.show(store: store, hud: hud)
+                DebugPopoverPresenter.shared.show(store: store)
             }
-            #else
-            hud.restoreIfNeeded()
             #endif
         }
     }
 
     var body: some Scene {
         MenuBarExtra {
-            MenuBarView(store: store, hud: hud)
+            MenuBarView(
+                store: store,
+                claudeMenuBarMetric: $claudeMenuBarMetric
+            )
         } label: {
-            MenuBarGlyph(snapshots: store.snapshots)
+            MenuBarGlyph(
+                states: store.states,
+                claudeSelection: MenuBarMetric(rawValue: claudeMenuBarMetric) ?? .weekly
+            )
         }
         .menuBarExtraStyle(.window)
     }
@@ -87,7 +84,7 @@ private final class DebugPopoverPresenter {
     static let shared = DebugPopoverPresenter()
     private var panel: NSPanel?
 
-    func show(store: UsageStore, hud: FloatingHUDController) {
+    func show(store: UsageStore) {
         let panel = NSPanel(
             contentRect: NSRect(x: 0, y: 0, width: 330, height: 500),
             styleMask: [.borderless, .nonactivatingPanel],
@@ -98,7 +95,10 @@ private final class DebugPopoverPresenter {
         panel.isOpaque = false
         panel.backgroundColor = .clear
         panel.hasShadow = true
-        panel.contentView = NSHostingView(rootView: MenuBarView(store: store, hud: hud))
+        panel.contentView = NSHostingView(rootView: MenuBarView(
+            store: store,
+            claudeMenuBarMetric: .constant(MenuBarMetric.weekly.rawValue)
+        ))
         panel.center()
         panel.orderFrontRegardless()
         self.panel = panel

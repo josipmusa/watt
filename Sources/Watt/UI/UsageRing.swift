@@ -2,7 +2,7 @@ import SwiftUI
 import WattCore
 
 enum WattPalette {
-    /// Claude's familiar warm clay, kept deliberately muted so the HUD stays calm.
+    /// Claude's familiar warm clay, kept deliberately muted so the panel stays calm.
     static let claude = Color(red: 0.851, green: 0.467, blue: 0.341)
     /// A quiet blue-teal that stays legible in both light and dark vibrancy.
     static let codex = Color(red: 0.310, green: 0.561, blue: 0.616)
@@ -21,6 +21,7 @@ struct UsageRing: View {
     var size: CGFloat = 58
     var lineWidth: CGFloat = 4
     var showsValue = true
+    var showsPercentSign = true
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.accessibilityDifferentiateWithoutColor) private var differentiateWithoutColor
@@ -58,7 +59,7 @@ struct UsageRing: View {
             }
 
             if showsValue {
-                Text(limit.roundedPercentage.map { "\($0)%" } ?? "—")
+                Text(limit.roundedPercentage.map { showsPercentSign ? "\($0)%" : "\($0)" } ?? "—")
                     .font(.system(size: max(10, size * 0.22), weight: .semibold, design: .rounded))
                     .monospacedDigit()
                     .foregroundStyle(limit.percentage == nil ? .secondary : .primary)
@@ -95,6 +96,7 @@ struct HarnessMark: View {
             if showsName {
                 Text(harness.name)
                     .font(.system(size: 12, weight: .semibold))
+                    .lineLimit(1)
             }
         }
         .accessibilityElement(children: .combine)
