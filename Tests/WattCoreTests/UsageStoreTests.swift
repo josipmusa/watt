@@ -200,6 +200,43 @@ struct UsageStoreTests {
         #expect(relaunchedStore.states.first?.failure?.retryAfter == 1_200)
         #expect(!relaunchedStore.isRefreshing)
     }
+
+    @Test func ignoresLegacyCacheWhenProviderBehaviorChanges() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("watt-tests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let cacheURL = directory.appendingPathComponent("usage-cache.json")
+        try Data(#"""
+        {
+          "entries": [{
+            "state": {
+              "harness": "claude",
+              "failure": {
+                "message": "Legacy provider cooldown",
+                "shouldBackOff": true,
+                "isNotConfigured": false,
+                "retryAfter": 3600
+              }
+            },
+            "nextScheduledRefresh": 9999999999,
+            "cooldownUntil": 9999999999
+          }]
+        }
+        """#.utf8).write(to: cacheURL)
+
+        let provider = SequencedProvider(
+            harness: .claude,
+            results: [.success(.demo(for: .claude))]
+        )
+        let store = UsageStore(providers: [provider], cacheURL: cacheURL)
+        store.start()
+        while store.isRefreshing { await Task.yield() }
+
+        #expect(await provider.fetchCount == 1)
+        #expect(store.states.first?.failure == nil)
+        #expect(store.states.first?.snapshot != nil)
+    }
 }
 
 private enum StubFailure: HarnessUsageProviderError {

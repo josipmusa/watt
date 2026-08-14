@@ -10,10 +10,7 @@ let package = Package(
         .executable(name: "Watt", targets: ["Watt"]),
     ],
     targets: [
-        .target(
-            name: "WattCore",
-            linkerSettings: [.linkedFramework("Security")]
-        ),
+        .target(name: "WattCore"),
         .executableTarget(
             name: "Watt",
             dependencies: ["WattCore"],

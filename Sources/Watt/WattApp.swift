@@ -72,7 +72,7 @@ struct WattApp: App {
 
     private static var liveProviders: [any HarnessUsageProviding] {
         [
-            ClaudeOAuthUsageProvider(credentials: ClaudeCodeCredentialProvider()),
+            ClaudeCLIUsageProvider(),
             CodexAppServerUsageProvider(),
         ]
     }

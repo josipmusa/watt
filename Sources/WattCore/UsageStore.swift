@@ -4,6 +4,8 @@ import Foundation
 
 @MainActor
 public final class UsageStore: ObservableObject {
+    private static let cacheVersion = 2
+
     @Published public private(set) var states: [HarnessUsageState] = []
     @Published public private(set) var isRefreshing = false
     @Published public private(set) var refreshingHarnesses: Set<HarnessKind> = []
@@ -241,7 +243,10 @@ public final class UsageStore: ObservableObject {
                 at: cacheURL.deletingLastPathComponent(),
                 withIntermediateDirectories: true
             )
-            try JSONEncoder().encode(UsageCache(entries: entries)).write(to: cacheURL, options: .atomic)
+            try JSONEncoder().encode(UsageCache(
+                version: Self.cacheVersion,
+                entries: entries
+            )).write(to: cacheURL, options: .atomic)
         } catch {
             // The cache is an optimization; usage fetching must continue if it cannot be written.
         }
@@ -249,11 +254,14 @@ public final class UsageStore: ObservableObject {
 
     private static func loadCache(from url: URL) -> UsageCache? {
         guard let data = try? Data(contentsOf: url) else { return nil }
-        return try? JSONDecoder().decode(UsageCache.self, from: data)
+        guard let cache = try? JSONDecoder().decode(UsageCache.self, from: data),
+              cache.version == cacheVersion else { return nil }
+        return cache
     }
 }
 
 private struct UsageCache: Codable {
+    let version: Int
     let entries: [CachedProviderState]
 }
 

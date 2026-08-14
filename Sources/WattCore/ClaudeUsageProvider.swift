@@ -1,154 +1,111 @@
 import Foundation
 
 public enum ClaudeUsageError: HarnessUsageProviderError, Equatable, Sendable {
-    case credentialsUnavailable
-    case subscriptionCredentialUnavailable
-    case credentialAccessDenied
-    case credentialFormatChanged
+    case cliUnavailable
+    case notLoggedIn
     case unsupportedAuthentication(String)
-    case unauthorized
-    case rateLimited(retryAfter: TimeInterval?)
-    case server(Int)
+    case commandFailed
     case changedResponse
-    case invalidResponse
-    case network
 
     public var errorDescription: String? {
         switch self {
-        case .credentialsUnavailable: "Claude Code credentials weren’t found. Open Claude Code and sign in first."
-        case .subscriptionCredentialUnavailable: "Claude is signed in, but Watt couldn’t find its subscription credential in Keychain."
-        case .credentialAccessDenied: "Watt couldn’t access the Claude credential in Keychain. Allow access when macOS asks, then refresh."
-        case .credentialFormatChanged: "Claude Code’s credential format has changed."
-        case let .unsupportedAuthentication(method): "Claude is configured with \(method), which doesn’t expose subscription limits to Watt."
-        case .unauthorized: "Claude’s sign-in has expired. Open Claude Code to sign in again."
-        case .rateLimited: "Claude usage is temporarily rate limited. Watt will retry automatically."
-        case .server: "Claude usage is temporarily unavailable."
-        case .changedResponse: "Claude’s usage response has changed."
-        case .invalidResponse: "Claude returned an invalid usage response."
-        case .network: "The network is unavailable."
+        case .cliUnavailable:
+            "Claude Code wasn’t found. Install Claude Code to monitor its usage."
+        case .notLoggedIn:
+            "Claude Code isn’t signed in. Open Claude Code and sign in first."
+        case let .unsupportedAuthentication(method):
+            "Claude is configured with \(method), which doesn’t expose subscription limits to Watt."
+        case .commandFailed:
+            "Watt couldn’t ask Claude Code for usage. Update Claude Code, then refresh."
+        case .changedResponse:
+            "Claude Code’s usage output has changed."
         }
     }
 
     public var shouldBackOff: Bool {
         switch self {
-        case .rateLimited, .server, .network: true
+        case .commandFailed: true
         default: false
         }
     }
 
     public var isNotConfigured: Bool {
-        self == .credentialsUnavailable
+        switch self {
+        case .cliUnavailable, .notLoggedIn: true
+        default: false
+        }
     }
 
-    public var retryAfter: TimeInterval? {
-        if case let .rateLimited(retryAfter) = self { return retryAfter }
-        return nil
-    }
+    public var retryAfter: TimeInterval? { nil }
 }
 
-public actor ClaudeOAuthUsageProvider: HarnessUsageProviding {
+/// Retrieves subscription limits through Claude Code itself. Claude remains
+/// responsible for its credentials, so Watt never reads or handles OAuth tokens.
+public actor ClaudeCLIUsageProvider: HarnessUsageProviding {
     public nonisolated let harness = HarnessKind.claude
-    // This undocumented API contract is intentionally confined to this type and its private DTOs.
-    private static let endpoint = URL(string: "https://api.anthropic.com/api/oauth/usage")!
-    private static let oauthBeta = "oauth-2025-04-20"
 
-    private let credentials: any CredentialProviding
-    private let session: URLSession
+    private let executable: URL?
     private let now: @Sendable () -> Date
+    private let runUsage: @Sendable (URL) async -> Data?
     private let configurationDetector: @Sendable () async -> ClaudeConfigurationStatus
 
     public init(
-        credentials: any CredentialProviding,
-        session: URLSession = .shared,
+        executable: URL? = ClaudeCLIResolver.findExecutable(),
         now: @escaping @Sendable () -> Date = { .now },
+        runUsage: (@Sendable (URL) async -> Data?)? = nil,
         configurationDetector: @escaping @Sendable () async -> ClaudeConfigurationStatus = {
             await ClaudeConfigurationDetector.detect()
         }
     ) {
-        self.credentials = credentials
-        self.session = session
+        self.executable = executable
         self.now = now
+        self.runUsage = runUsage ?? { executable in
+            await ClaudeCLIUsageProvider.runUsageCommand(executable: executable)
+        }
         self.configurationDetector = configurationDetector
     }
 
     public func fetchUsage() async throws -> HarnessUsageSnapshot {
-        do {
-            return try await request(forceCredentialReload: false)
-        } catch ClaudeUsageError.unauthorized {
-            credentials.discardCachedCredential()
-            return try await request(forceCredentialReload: true)
+        guard let executable else { throw ClaudeUsageError.cliUnavailable }
+        guard let data = await runUsage(executable) else {
+            throw await failureForCurrentConfiguration()
         }
-    }
 
-    private func request(forceCredentialReload: Bool) async throws -> HarnessUsageSnapshot {
-        let token: String
         do {
-            token = try credentials.accessToken(forceReload: forceCredentialReload)
-        } catch CredentialError.notFound {
-            switch await configurationDetector() {
-            case .notConfigured:
-                throw ClaudeUsageError.credentialsUnavailable
-            case .subscription:
-                throw ClaudeUsageError.subscriptionCredentialUnavailable
-            case let .configured(method):
-                throw ClaudeUsageError.unsupportedAuthentication(method)
+            return try Self.decode(data, fetchedAt: now())
+        } catch let error as ClaudeUsageError {
+            if error == .changedResponse {
+                throw await failureForCurrentConfiguration(fallback: error)
             }
-        } catch CredentialError.invalidFormat {
-            throw ClaudeUsageError.credentialFormatChanged
-        } catch {
-            throw ClaudeUsageError.credentialAccessDenied
+            throw error
         }
-
-        var request = URLRequest(url: Self.endpoint)
-        request.httpMethod = "GET"
-        request.timeoutInterval = 10
-        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        request.setValue(Self.oauthBeta, forHTTPHeaderField: "anthropic-beta")
-        request.setValue("application/json", forHTTPHeaderField: "Accept")
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-
-        let data: Data
-        let response: URLResponse
-        do {
-            (data, response) = try await session.data(for: request)
-        } catch {
-            throw ClaudeUsageError.network
-        }
-
-        guard let http = response as? HTTPURLResponse else {
-            throw ClaudeUsageError.invalidResponse
-        }
-        switch http.statusCode {
-        case 200: break
-        case 401, 403: throw ClaudeUsageError.unauthorized
-        case 429:
-            throw ClaudeUsageError.rateLimited(
-                retryAfter: Self.retryAfterDelay(from: http, now: now())
-            )
-        case 500...599: throw ClaudeUsageError.server(http.statusCode)
-        default: throw ClaudeUsageError.invalidResponse
-        }
-
-        return try Self.decode(data, fetchedAt: now())
     }
 
-    public static func decode(_ data: Data, fetchedAt: Date = .now) throws -> HarnessUsageSnapshot {
-        let decoder = JSONDecoder()
-        let response: UsageResponseDTO
+    public static func decode(
+        _ data: Data,
+        fetchedAt: Date = .now,
+        calendar: Calendar = Calendar(identifier: .gregorian)
+    ) throws -> HarnessUsageSnapshot {
+        let envelope: ClaudeUsageEnvelope
         do {
-            response = try decoder.decode(UsageResponseDTO.self, from: data)
+            envelope = try JSONDecoder().decode(ClaudeUsageEnvelope.self, from: data)
         } catch {
             throw ClaudeUsageError.changedResponse
         }
 
-        guard response.hasKnownUsageField else {
-            throw ClaudeUsageError.changedResponse
+        let result = envelope.result.trimmingCharacters(in: .whitespacesAndNewlines)
+        if envelope.isError {
+            let normalized = result.lowercased()
+            if normalized.contains("not logged in") || normalized.contains("please run /login") {
+                throw ClaudeUsageError.notLoggedIn
+            }
+            throw ClaudeUsageError.commandFailed
         }
 
-        let fable = response.limits?.first(where: { limit in
-            limit.kind.caseInsensitiveCompare("weekly_scoped") == .orderedSame &&
-            limit.scope?.model?.displayName.range(of: "fable", options: .caseInsensitive) != nil
-        })
+        let parsed = parseLimits(from: result, now: fetchedAt, calendar: calendar)
+        guard parsed.session != nil || parsed.weekly != nil || parsed.fable != nil else {
+            throw ClaudeUsageError.changedResponse
+        }
 
         return HarnessUsageSnapshot(
             harness: .claude,
@@ -156,44 +113,214 @@ public actor ClaudeOAuthUsageProvider: HarnessUsageProviding {
                 UsageLimit(
                     id: "session",
                     name: "Session",
-                    percentage: response.fiveHour?.utilization,
-                    resetDate: parseDate(response.fiveHour?.resetsAt)
+                    percentage: parsed.session?.percentage,
+                    resetDate: parsed.session?.resetDate
                 ),
                 UsageLimit(
                     id: "weekly",
                     name: "Weekly",
-                    percentage: response.sevenDay?.utilization,
-                    resetDate: parseDate(response.sevenDay?.resetsAt)
+                    percentage: parsed.weekly?.percentage,
+                    resetDate: parsed.weekly?.resetDate
                 ),
                 UsageLimit(
                     id: "fable",
                     name: "Fable",
-                    percentage: fable?.percent,
-                    resetDate: parseDate(fable?.resetsAt)
+                    percentage: parsed.fable?.percentage,
+                    resetDate: parsed.fable?.resetDate
                 ),
             ],
             fetchedAt: fetchedAt
         )
     }
 
-    private static func parseDate(_ value: String?) -> Date? {
-        guard let value else { return nil }
-        let fractional = ISO8601DateFormatter()
-        fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        return fractional.date(from: value) ?? ISO8601DateFormatter().date(from: value)
+    static func runUsageCommand(
+        executable: URL,
+        workingDirectory: URL = defaultWorkingDirectory
+    ) async -> Data? {
+        do {
+            try FileManager.default.createDirectory(
+                at: workingDirectory,
+                withIntermediateDirectories: true
+            )
+        } catch {
+            return nil
+        }
+
+        return await BoundedProcess.run(
+            executable: executable,
+            arguments: [
+                "--safe-mode",
+                "-p", "/usage",
+                "--output-format", "json",
+                "--no-session-persistence",
+            ],
+            environment: [
+                "LANG": "C",
+                "LC_ALL": "C",
+                "NO_COLOR": "1",
+            ],
+            workingDirectory: workingDirectory,
+            timeout: 10,
+            maximumOutputBytes: 1_048_576
+        )
     }
 
-    static func retryAfterDelay(from response: HTTPURLResponse, now: Date = .now) -> TimeInterval? {
-        guard let value = response.value(forHTTPHeaderField: "Retry-After")?.trimmingCharacters(in: .whitespaces),
-              !value.isEmpty else { return nil }
-        if let seconds = TimeInterval(value), seconds >= 0 { return seconds }
+    private static var defaultWorkingDirectory: URL {
+        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("Watt", isDirectory: true)
+            .appendingPathComponent("ClaudeCLI", isDirectory: true)
+    }
 
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.timeZone = TimeZone(secondsFromGMT: 0)
-        formatter.dateFormat = "EEE',' dd MMM yyyy HH':'mm':'ss z"
-        guard let date = formatter.date(from: value) else { return nil }
-        return max(0, date.timeIntervalSince(now))
+    private func failureForCurrentConfiguration(
+        fallback: ClaudeUsageError = .commandFailed
+    ) async -> ClaudeUsageError {
+        switch await configurationDetector() {
+        case .notConfigured: .notLoggedIn
+        case .subscription: fallback
+        case let .configured(method): .unsupportedAuthentication(method)
+        }
+    }
+
+    private static func parseLimits(
+        from result: String,
+        now: Date,
+        calendar: Calendar
+    ) -> ParsedLimits {
+        var limits = ParsedLimits()
+        for line in result.split(whereSeparator: \.isNewline).map(String.init) {
+            if line.hasPrefix("Current session:") {
+                limits.session = parseLimitLine(line, now: now, calendar: calendar)
+            } else if line.hasPrefix("Current week (all models):") {
+                limits.weekly = parseLimitLine(line, now: now, calendar: calendar)
+            } else if line.range(of: "Current week (Fable", options: .caseInsensitive) != nil {
+                limits.fable = parseLimitLine(line, now: now, calendar: calendar)
+            }
+        }
+        return limits
+    }
+
+    private static func parseLimitLine(
+        _ line: String,
+        now: Date,
+        calendar: Calendar
+    ) -> ParsedLimit? {
+        guard let percentageRange = line.range(
+            of: #"[0-9]+(?:\.[0-9]+)?(?=% used)"#,
+            options: .regularExpression
+        ), let percentage = Double(line[percentageRange]) else { return nil }
+
+        let resetMarker = "resets "
+        let resetDate = line.range(of: resetMarker).flatMap { marker in
+            parseResetDate(String(line[marker.upperBound...]), now: now, calendar: calendar)
+        }
+        return ParsedLimit(percentage: percentage, resetDate: resetDate)
+    }
+
+    private static func parseResetDate(
+        _ value: String,
+        now: Date,
+        calendar baseCalendar: Calendar
+    ) -> Date? {
+        let pattern = #"^([A-Z][a-z]{2}) ([0-9]{1,2}) at ([0-9]{1,2})(?::([0-9]{2}))?(am|pm) \(([^)]+)\)$"#
+        guard let regex = try? NSRegularExpression(pattern: pattern),
+              let match = regex.firstMatch(
+                  in: value,
+                  range: NSRange(value.startIndex..., in: value)
+              ),
+              match.numberOfRanges == 7 else { return nil }
+
+        func capture(_ index: Int) -> String? {
+            guard let range = Range(match.range(at: index), in: value) else { return nil }
+            return String(value[range])
+        }
+
+        let months = [
+            "Jan": 1, "Feb": 2, "Mar": 3, "Apr": 4,
+            "May": 5, "Jun": 6, "Jul": 7, "Aug": 8,
+            "Sep": 9, "Oct": 10, "Nov": 11, "Dec": 12,
+        ]
+        guard let monthName = capture(1), let month = months[monthName],
+              let dayText = capture(2), let day = Int(dayText),
+              let hourText = capture(3), var hour = Int(hourText),
+              let meridiem = capture(5),
+              let timeZoneName = capture(6), let timeZone = TimeZone(identifier: timeZoneName) else {
+            return nil
+        }
+        let minute = capture(4).flatMap(Int.init) ?? 0
+
+        hour %= 12
+        if meridiem == "pm" { hour += 12 }
+
+        var calendar = baseCalendar
+        calendar.timeZone = timeZone
+        let currentYear = calendar.component(.year, from: now)
+        var components = DateComponents(
+            calendar: calendar,
+            timeZone: timeZone,
+            year: currentYear,
+            month: month,
+            day: day,
+            hour: hour,
+            minute: minute
+        )
+        guard var date = calendar.date(from: components) else { return nil }
+        if date < now.addingTimeInterval(-3_600) {
+            components.year = currentYear + 1
+            guard let nextYear = calendar.date(from: components) else { return nil }
+            date = nextYear
+        }
+        return date
+    }
+}
+
+public enum ClaudeCLIResolver {
+    public static func findExecutable(
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser,
+        fileManager: FileManager = .default
+    ) -> URL? {
+        var paths: [String] = []
+        if let override = environment["WATT_CLAUDE_PATH"], !override.isEmpty {
+            paths.append(override)
+        }
+        paths.append(contentsOf: [
+            "/opt/homebrew/bin/claude",
+            "/usr/local/bin/claude",
+            homeDirectory.appendingPathComponent(".local/bin/claude").path,
+            homeDirectory.appendingPathComponent(".claude/local/claude").path,
+            homeDirectory.appendingPathComponent(".npm-global/bin/claude").path,
+            homeDirectory.appendingPathComponent(".bun/bin/claude").path,
+            homeDirectory.appendingPathComponent(".volta/bin/claude").path,
+            homeDirectory.appendingPathComponent(".asdf/shims/claude").path,
+            homeDirectory.appendingPathComponent(".local/share/mise/shims/claude").path,
+            homeDirectory.appendingPathComponent("Library/pnpm/claude").path,
+        ])
+        paths.append(contentsOf: versionManagerCandidates(
+            homeDirectory: homeDirectory,
+            fileManager: fileManager
+        ))
+        if let path = environment["PATH"] {
+            paths.append(contentsOf: path.split(separator: ":").map { "\($0)/claude" })
+        }
+        return LocalExecutableResolver.firstTrusted(in: paths, fileManager: fileManager)
+    }
+
+    private static func versionManagerCandidates(
+        homeDirectory: URL,
+        fileManager: FileManager
+    ) -> [String] {
+        let roots = [
+            homeDirectory.appendingPathComponent(".nvm/versions/node", isDirectory: true),
+            homeDirectory.appendingPathComponent(".nodenv/versions", isDirectory: true),
+        ]
+        return roots.flatMap { root in
+            let versions = (try? fileManager.contentsOfDirectory(
+                at: root,
+                includingPropertiesForKeys: nil,
+                options: [.skipsHiddenFiles]
+            )) ?? []
+            return versions.map { $0.appendingPathComponent("bin/claude").path }
+        }
     }
 }
 
@@ -227,10 +354,10 @@ public enum ClaudeConfigurationDetector {
             return .configured("Microsoft Foundry")
         }
 
-        guard let executable = findExecutable(environment: environment, homeDirectory: homeDirectory) else {
-            return .notConfigured
-        }
-        guard let data = await runAuthStatus(executable: executable) else {
+        guard let executable = ClaudeCLIResolver.findExecutable(
+            environment: environment,
+            homeDirectory: homeDirectory
+        ), let data = await runAuthStatus(executable: executable) else {
             return .notConfigured
         }
         return decode(data)
@@ -248,33 +375,6 @@ public enum ClaudeConfigurationDetector {
         }
         let method = status.apiProvider ?? status.authMethod
         return .configured(displayName(for: method))
-    }
-
-    private static func findExecutable(
-        environment: [String: String],
-        homeDirectory: URL,
-        fileManager: FileManager = .default
-    ) -> URL? {
-        var paths: [String] = []
-        if let override = environment["WATT_CLAUDE_PATH"], !override.isEmpty {
-            paths.append(override)
-        }
-        paths.append(contentsOf: [
-            "/opt/homebrew/bin/claude",
-            "/usr/local/bin/claude",
-            homeDirectory.appendingPathComponent(".local/bin/claude").path,
-            homeDirectory.appendingPathComponent(".claude/local/claude").path,
-            homeDirectory.appendingPathComponent(".npm-global/bin/claude").path,
-            homeDirectory.appendingPathComponent(".bun/bin/claude").path,
-            homeDirectory.appendingPathComponent(".volta/bin/claude").path,
-            homeDirectory.appendingPathComponent(".asdf/shims/claude").path,
-            homeDirectory.appendingPathComponent(".local/share/mise/shims/claude").path,
-            homeDirectory.appendingPathComponent("Library/pnpm/claude").path,
-        ])
-        if let path = environment["PATH"] {
-            paths.append(contentsOf: path.split(separator: ":").map { "\($0)/claude" })
-        }
-        return LocalExecutableResolver.firstTrusted(in: paths, fileManager: fileManager)
     }
 
     static func runAuthStatus(executable: URL) async -> Data? {
@@ -306,6 +406,8 @@ enum BoundedProcess {
     static func run(
         executable: URL,
         arguments: [String],
+        environment: [String: String] = [:],
+        workingDirectory: URL? = nil,
         timeout: TimeInterval,
         maximumOutputBytes: Int
     ) async -> Data? {
@@ -313,6 +415,8 @@ enum BoundedProcess {
             ProcessCapture(
                 executable: executable,
                 arguments: arguments,
+                environment: environment,
+                workingDirectory: workingDirectory,
                 timeout: timeout,
                 maximumOutputBytes: maximumOutputBytes,
                 continuation: continuation
@@ -325,6 +429,8 @@ private final class ProcessCapture: @unchecked Sendable {
     private let lock = NSLock()
     private let executable: URL
     private let arguments: [String]
+    private let environment: [String: String]
+    private let workingDirectory: URL?
     private let timeout: TimeInterval
     private let maximumOutputBytes: Int
     private var continuation: CheckedContinuation<Data?, Never>?
@@ -336,12 +442,16 @@ private final class ProcessCapture: @unchecked Sendable {
     init(
         executable: URL,
         arguments: [String],
+        environment: [String: String],
+        workingDirectory: URL?,
         timeout: TimeInterval,
         maximumOutputBytes: Int,
         continuation: CheckedContinuation<Data?, Never>
     ) {
         self.executable = executable
         self.arguments = arguments
+        self.environment = environment
+        self.workingDirectory = workingDirectory
         self.timeout = timeout
         self.maximumOutputBytes = maximumOutputBytes
         self.continuation = continuation
@@ -352,6 +462,9 @@ private final class ProcessCapture: @unchecked Sendable {
         let pipe = Pipe()
         process.executableURL = executable
         process.arguments = arguments
+        process.environment = ProcessInfo.processInfo.environment.merging(environment) { _, override in override }
+        process.currentDirectoryURL = workingDirectory
+        process.standardInput = FileHandle.nullDevice
         process.standardOutput = pipe
         process.standardError = FileHandle.nullDevice
         self.process = process
@@ -427,60 +540,30 @@ private final class ProcessCapture: @unchecked Sendable {
     }
 }
 
+private struct ClaudeUsageEnvelope: Decodable {
+    let isError: Bool
+    let result: String
+
+    enum CodingKeys: String, CodingKey {
+        case isError = "is_error"
+        case result
+    }
+}
+
+private struct ParsedLimits {
+    var session: ParsedLimit?
+    var weekly: ParsedLimit?
+    var fable: ParsedLimit?
+}
+
+private struct ParsedLimit {
+    let percentage: Double
+    let resetDate: Date?
+}
+
 private struct ClaudeAuthStatus: Decodable {
     let loggedIn: Bool
     let authMethod: String
     let apiProvider: String?
     let subscriptionType: String?
-}
-
-private struct UsageResponseDTO: Decodable {
-    let fiveHour: UsageWindowDTO?
-    let sevenDay: UsageWindowDTO?
-    let limits: [ScopedLimitDTO]?
-
-    enum CodingKeys: String, CodingKey {
-        case fiveHour = "five_hour"
-        case sevenDay = "seven_day"
-        case limits
-    }
-
-    var hasKnownUsageField: Bool {
-        fiveHour != nil || sevenDay != nil || limits != nil
-    }
-}
-
-private struct UsageWindowDTO: Decodable {
-    let utilization: Double?
-    let resetsAt: String?
-
-    enum CodingKeys: String, CodingKey {
-        case utilization
-        case resetsAt = "resets_at"
-    }
-}
-
-private struct ScopedLimitDTO: Decodable {
-    let kind: String
-    let group: String
-    let percent: Double
-    let resetsAt: String?
-    let scope: ScopeDTO?
-
-    enum CodingKeys: String, CodingKey {
-        case kind, group, percent, scope
-        case resetsAt = "resets_at"
-    }
-}
-
-private struct ScopeDTO: Decodable {
-    let model: ModelDTO?
-}
-
-private struct ModelDTO: Decodable {
-    let displayName: String
-
-    enum CodingKeys: String, CodingKey {
-        case displayName = "display_name"
-    }
 }
