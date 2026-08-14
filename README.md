@@ -34,11 +34,11 @@ The same macOS security prompt described above may appear.
 
 Launch Watt and click its menu-bar item to see current usage and reset times for Claude Code and Codex. You can choose which limit to show in the menu bar and enable **Launch at Login** from the bottom of the popover if wanted.
 
-On first use with Claude, macOS may ask for access to the `Claude Code-credentials` Keychain item. Choose **Allow** or **Always Allow** so Watt can request Claude usage. Codex authentication remains managed by Codex itself.
+Claude and Codex authentication remain managed by their respective command-line tools. Watt asks each installed tool for usage information and never reads their credentials.
 
 ## Privacy
 
-Watt has no analytics, telemetry, third-party backend, or third-party dependencies. It requests usage directly from Anthropic and Codex, never reads prompts, conversations, projects, or source code, and does not persist OAuth tokens.
+Watt has no analytics, telemetry, third-party backend, or third-party dependencies. It requests usage through the installed Claude Code and Codex tools, never reads prompts, conversations, projects, source code, or authentication credentials.
 
 ## License
 
