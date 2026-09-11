@@ -32,6 +32,7 @@ app_path="$project_dir/.build/Watt.app"
 rm -rf "$app_path"
 mkdir -p "$app_path/Contents/MacOS" "$app_path/Contents/Resources"
 cp "$binary_path" "$app_path/Contents/MacOS/Watt"
+cp -R "${binary_path:h}/Watt_Watt.bundle" "$app_path/Contents/Resources/"
 cp "$info_plist" "$app_path/Contents/Info.plist"
 cp "$project_dir/Resources/Watt.icns" "$app_path/Contents/Resources/Watt.icns"
 /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $version" "$app_path/Contents/Info.plist"
@@ -39,5 +40,6 @@ cp "$project_dir/Resources/Watt.icns" "$app_path/Contents/Resources/Watt.icns"
 # Harden even local/ad-hoc builds. This does not require an Apple Developer
 # account and keeps the packaged app aligned with the Xcode target's settings.
 codesign --force --options runtime --sign - "$app_path"
+codesign --verify --deep --strict "$app_path"
 
 echo "$app_path"

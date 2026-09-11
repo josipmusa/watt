@@ -108,7 +108,11 @@ struct HarnessMark: View {
 
     private var providerLogoBundle: Bundle {
         #if SWIFT_PACKAGE
-        Bundle.module
+        if let resourceURL = Bundle.main.resourceURL,
+           let bundle = Bundle(url: resourceURL.appendingPathComponent("Watt_Watt.bundle")) {
+            return bundle
+        }
+        return Bundle.module
         #else
         Bundle.main
         #endif
